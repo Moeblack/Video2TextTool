@@ -19,6 +19,7 @@
 
 - PyQt5
 - QFluentWidgets
+- ffmpeg
 - [ASRTools](https://github.com/WEIFENG2333/AsrTools)
 
 ## 特别感谢
