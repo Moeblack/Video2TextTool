@@ -318,6 +318,10 @@ class MainWindow(SplitFluentWindow):
         print(message)
 
 if __name__ == "__main__":
+    if hasattr(Qt, 'AA_EnableHighDpiScaling'):
+        QApplication.setAttribute(Qt.AA_EnableHighDpiScaling)
+    if hasattr(Qt, 'AA_UseHighDpiPixmaps'):
+        QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps)    
     app = QApplication(sys.argv)
     window = MainWindow()
     window.show()
