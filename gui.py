@@ -8,13 +8,21 @@ from qfluentwidgets import FluentIcon as FIF
 from PyQt5.QtGui import QFont
 from PyQt5.QtWidgets import QApplication, QWidget, QFileDialog, QMessageBox, QSizePolicy
 from PyQt5.QtWidgets import QVBoxLayout, QPushButton, QComboBox, QListWidget, QLabel, QHBoxLayout
-from PyQt5.QtCore import Qt, QMimeData, QSize
+from PyQt5.QtCore import Qt, QMimeData, QSize, QObject, pyqtSignal
 from PyQt5.QtGui import QDragEnterEvent, QDropEvent, QDrag, QScreen
 from qfluentwidgets import (FluentWindow, PushButton, ComboBox, ListWidget, StrongBodyLabel, 
                           SplitFluentWindow, SubtitleLabel, setTheme, Theme)
 
 from bk_asr import BcutASR, JianYingASR, KuaiShouASR
 from utils import convert_video_to_audio
+from math import ceil
+from datetime import timedelta
+
+class SignalHandler(QObject):
+    status_update = pyqtSignal(str)
+    show_warning = pyqtSignal(str, str)
+    show_critical = pyqtSignal(str, str)
+    show_info = pyqtSignal(str, str)
 
 class MainWindow(SplitFluentWindow):
     def __init__(self):
@@ -68,6 +76,13 @@ class MainWindow(SplitFluentWindow):
         self.main_widget = QWidget()
         self.main_widget.setObjectName("mainInterface")
         self.addSubInterface(self.main_widget, 'main', '主页')
+        
+        # 添加信号处理器
+        self.signal_handler = SignalHandler()
+        self.signal_handler.status_update.connect(self.update_status)
+        self.signal_handler.show_warning.connect(self.show_warning_dialog)
+        self.signal_handler.show_critical.connect(self.show_critical_dialog)
+        self.signal_handler.show_info.connect(self.show_info_dialog)
         
         self.init_ui()
 
@@ -259,63 +274,138 @@ class MainWindow(SplitFluentWindow):
 
     def process_files(self):
         output_type = self.output_combo.currentText()
-        for file_path in self.input_files:
-            try:
-                # 处理文件名，避免路径中的特殊字符问题
-                file_name = os.path.splitext(os.path.basename(file_path))[0]
-                temp_audio = os.path.join(os.path.dirname(file_path), f"{file_name}_temp_audio.mp3")
-                
-                # 如果是视频文件，转换为音频
-                if os.path.splitext(file_path)[1].lower() in ['.mp4', '.avi', '.mov', '.m4v', '.flv', '.mkv']:
-                    try:
-                        self.update_status(f"正在将视频转换为音频：{file_path}")
-                        convert_video_to_audio(file_path, temp_audio)
-                    except Exception as e:
-                        self.update_status(f"转换失败：{str(e)}")
-                        continue
-                else:
-                    temp_audio = file_path
-                
-                # 使用 ASR 引擎
+        has_error = False
+        
+        try:
+            for file_path in self.input_files:
                 try:
-                    self.update_status(f"正在处理文件：{temp_audio}")
-                    asr_instance = self.asr_engine(temp_audio)
-                    result = asr_instance.run()
+                    file_name = os.path.splitext(os.path.basename(file_path))[0]
+                    temp_audio = os.path.join(os.path.dirname(file_path), f"{file_name}_temp_audio.mp3")
                     
-                    # 根据选择的输出格式保存文件
-                    if output_type == "纯文本":
-                        output_file = output_file = os.path.join(os.path.dirname(file_path), f"{file_name}.txt")    
-                        with open(output_file, 'w', encoding='utf-8') as f:
-                            f.write(result.to_txt())
-                    else:  # SRT字幕
-                        output_file = os.path.join(os.path.dirname(file_path), f"{file_name}.srt")
-                        with open(output_file, 'w', encoding='utf-8') as f:
-                            f.write(result.to_srt())
+                    # 转换视频为音频
+                    if os.path.splitext(file_path)[1].lower() in ['.mp4', '.avi', '.mov', '.m4v', '.flv', '.mkv']:
+                        try:
+                            self.signal_handler.status_update.emit(f"正在将视频转换为音频：{file_path}")
+                            convert_video_to_audio(file_path, temp_audio)
+                        except Exception as e:
+                            raise Exception(f"视频转换失败: {str(e)}")
+                    else:
+                        temp_audio = file_path
+
+                    # 分析音频时长
+                    try:
+                        self.signal_handler.status_update.emit("正在分析音频时长...")
+                        import ffmpeg
+                        probe = ffmpeg.probe(temp_audio)
+                        duration = float(probe['format']['duration'])
+                        chunk_duration = 45 * 60  # 45分钟
+                        num_chunks = ceil(duration / chunk_duration)
+                    except Exception as e:
+                        raise Exception(f"分析音频时长失败: {str(e)}")
+
+                    # 逐段处理
+                    all_results = []
+                    base_name = os.path.splitext(temp_audio)[0]
+                    
+                    for i in range(num_chunks):
+                        try:
+                            start_time = i * chunk_duration
+                            chunk_file = f"{base_name}_part_{i+1}.mp3"
                             
-                    self.update_status(f"处理完成，结果已保存为：{output_file}")
+                            # 分割当前段
+                            self.signal_handler.status_update.emit(f"正在分割第 {i+1}/{num_chunks} 段音频...")
+                            stream = ffmpeg.input(temp_audio, ss=start_time, t=chunk_duration)
+                            stream = ffmpeg.output(stream, chunk_file)
+                            ffmpeg.run(stream, overwrite_output=True, capture_stdout=True, capture_stderr=True)
+                            
+                            # 立即处理当前段
+                            self.signal_handler.status_update.emit(f"正在识别第 {i+1}/{num_chunks} 段音频...")
+                            asr_instance = self.asr_engine(chunk_file)
+                            result = asr_instance.run()
+                            
+                            if result and result.has_data():
+                                all_results.append(result)
+                            else:
+                                raise Exception(f"第 {i+1} 段ASR处理返回空结果")
+                            
+                        except Exception as e:
+                            raise Exception(f"处理第 {i+1} 段时出错: {str(e)}")
+                        finally:
+                            if os.path.exists(chunk_file):
+                                try:
+                                    os.remove(chunk_file)
+                                except:
+                                    pass
+
+                    # 验证是否有有效结果
+                    if not all_results:
+                        raise Exception("没有获取到有效的识别结果")
+                    
+                    # 合并结果并保存
+                    try:
+                        if output_type == "纯文本":
+                            output_file = os.path.join(os.path.dirname(file_path), f"{file_name}.txt")
+                            with open(output_file, 'w', encoding='utf-8') as f:
+                                for result in all_results:
+                                    text = result.to_txt()
+                                    if text:
+                                        f.write(text + "\n")
+                        else:  # SRT字幕
+                            output_file = os.path.join(os.path.dirname(file_path), f"{file_name}.srt")
+                            with open(output_file, 'w', encoding='utf-8') as f:
+                                offset = 0
+                                for i, result in enumerate(all_results):
+                                    if i > 0:
+                                        offset += 45 * 60 * 1000
+                                    adjusted_segments = []
+                                    for seg in result.segments:
+                                        seg.start_time += offset
+                                        seg.end_time += offset
+                                        adjusted_segments.append(seg)
+                                    result.segments = adjusted_segments
+                                    srt = result.to_srt()
+                                    if srt:
+                                        f.write(srt + "\n")
+                                    
+                            self.signal_handler.status_update.emit(f"处理完成，结果已保存为：{output_file}")
+                    except Exception as e:
+                        raise Exception(f"保存结果失败: {str(e)}")
                     
                 except Exception as e:
-                    self.update_status(f"处理出错：{str(e)}")
+                    has_error = True
+                    error_msg = f"处理文件 {file_path} 时出错: {str(e)}"
+                    self.signal_handler.status_update.emit(error_msg)
+                    self.signal_handler.show_warning.emit("错误", error_msg)
                     continue
                 finally:
-                    # 清理临时文件
                     if os.path.exists(temp_audio) and temp_audio != file_path:
                         try:
                             os.remove(temp_audio)
-                        except Exception as e:
-                            self.update_status(f"清理临时文件失败：{str(e)}")
-
-            except Exception as e:
-                self.update_status(f"处理出错：{str(e)}")
-                continue
-
-        self.update_status("全部文件处理完成！")
-
+                        except:
+                            pass
+            
+            final_message = "全部文件处理完成！" if not has_error else "处理完成，但有部分文件出现错误，请查看详细信息。"
+            self.signal_handler.status_update.emit(final_message)
+            if not has_error:
+                self.signal_handler.show_info.emit("完成", final_message)
+            
+        except Exception as e:
+            error_msg = f"发生严重错误: {str(e)}"
+            self.signal_handler.status_update.emit(error_msg)
+            self.signal_handler.show_critical.emit("错误", error_msg)
 
     def update_status(self, message):
-        # 在状态标签中显示消息
         self.status_label.setText(message)
         print(message)
+
+    def show_warning_dialog(self, title, message):
+        QMessageBox.warning(self, title, message)
+        
+    def show_critical_dialog(self, title, message):
+        QMessageBox.critical(self, title, message)
+        
+    def show_info_dialog(self, title, message):
+        QMessageBox.information(self, title, message)
 
 if __name__ == "__main__":
     if hasattr(Qt, 'AA_EnableHighDpiScaling'):
