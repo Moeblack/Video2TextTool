@@ -1,14 +1,10 @@
-# 语音转文字工具
+# 视频/语音转文字工具
 
-一个基于 PyQt5 的语音转文字工具，支持多种音视频格式，可生成纯文本或 SRT 字幕文件。
+一个基于 arsTools 的视频/语音转文字工具，支持多种音视频格式，可生成纯文本或 SRT 字幕文件。
 
 ## 主要特点
 
 - 🎯 支持多种音视频格式转换
-- 🚀 多线程并发处理，效率更高
-- 💻 简洁美观的图形界面
-- 📝 支持纯文本和 SRT 字幕输出
-- 🎨 支持高 DPI 显示
 
 ## 使用方法
 
@@ -23,6 +19,7 @@
 
 - PyQt5
 - QFluentWidgets
+- ffmpeg
 - [ASRTools](https://github.com/WEIFENG2333/AsrTools)
 
 ## 特别感谢
@@ -33,7 +30,6 @@
 - 基于 PyQt5 和 QFluentWidgets 的美观界面
 - 多线程并发处理，效率超高
 - 支持多种字幕格式输出
-- 活跃的社区支持
 
 ASRTools 项目为本工具的开发提供了宝贵的参考和启发。如果您对语音转文字工具感兴趣，强烈推荐访问 [ASRTools 的 GitHub 仓库](https://github.com/WEIFENG2333/AsrTools)。
 
